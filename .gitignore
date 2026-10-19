@@ -7,3 +7,6 @@ dist/
 .ruff_cache/
 .venv/
 venv/
+
+# Left behind only if unmade is killed mid-verification.
+.unmade-*.mk
