@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-from . import analyse, database, lex, report
+from . import analyse, database, lex, report, verify
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -53,6 +53,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--make", default="make", help="the make binary to ask (default: make)")
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help=(
+            "skip the deletion check. Faster, and the findings become what a "
+            "precedence model thinks rather than what make confirmed."
+        ),
+    )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="one line per finding, nothing else"
     )
@@ -138,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
 
     result = analyse.analyse(lexed, db, name, directory)
     result.make_version = version
+    if not args.no_verify:
+        result = verify.verify(result, directory, args.make, tuple(args.define))
     for file in unreadable:
         result.errors.append(f"make read {file} but unmade could not open it")
 

@@ -78,6 +78,10 @@ class Target:
     recipe_line: int | None
     double_colon: bool
     prerequisites: tuple[str, ...] = ()
+    #: The recipe's command lines, as make would run them. Part of the
+    #: fingerprint used to verify a finding, so it must not include anything
+    #: line-numbered.
+    recipe_text: tuple[str, ...] = ()
 
     @property
     def has_recipe(self) -> bool:
@@ -171,8 +175,29 @@ def parse(stdout: str, stderr: str = "") -> Database:
     targets: list[Target] = []
 
     lines = stdout.split("\n")
+
+    # One `make -qp` can print more than one database. A makefile that runs
+    # sub-makes while it is being read passes `-qp` down through MAKEFLAGS,
+    # and every one of those children prints its own. The Linux selftests
+    # Makefile produces 126 of them, one per entry in TARGETS, each with its
+    # own CURDIR -- and the top-level database is the *last*, because the
+    # children finish while the parent is still reading.
+    #
+    # So: keep only the final dump. Parsing the concatenation attributes
+    # whichever child got there first to the file in front of you.
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("# Make data base, printed on")
+    ]
+    if len(starts) > 1:
+        lines = lines[starts[-1] :]
+
     section = "head"
     pending_origin: tuple[str, str | None, int | None] | None = None
+    #: make writes `# Not a target:` above an entry that is only ever a
+    #: prerequisite. Those are not rules and must not be read as any.
+    not_a_target = False
 
     index = 0
     while index < len(lines):
@@ -236,8 +261,19 @@ def parse(stdout: str, stderr: str = "") -> Database:
             continue
 
         if section == "files":
+            if line == "# Not a target:":
+                not_a_target = True
+                index += 1
+                continue
             target = _TARGET.match(line)
             if target and not line.startswith(("#", "\t", " ")):
+                if not_a_target:
+                    # Skip this entry's whole comment block.
+                    not_a_target = False
+                    index += 1
+                    while index < len(lines) and lines[index].startswith(("#", "\t", " ")):
+                        index += 1
+                    continue
                 name = target.group("name").strip()
                 after = line[len(target.group("name")) :]
                 double = after.startswith("::")
@@ -245,6 +281,8 @@ def parse(stdout: str, stderr: str = "") -> Database:
                 phony = False
                 recipe_file: str | None = None
                 recipe_line: int | None = None
+                recipe_text: list[str] = []
+                in_recipe = False
                 index += 1
                 # The target's comment block runs until a blank line.
                 while index < len(lines) and lines[index].startswith(("#", "\t", " ")):
@@ -255,11 +293,23 @@ def parse(stdout: str, stderr: str = "") -> Database:
                     if recipe:
                         recipe_file = recipe.group("file")
                         recipe_line = int(recipe.group("line"))
+                        in_recipe = True
                     elif _RECIPE_BUILTIN.match(detail):
                         recipe_file = "<built-in>"
+                        in_recipe = True
+                    elif in_recipe and detail.startswith("\t"):
+                        recipe_text.append(detail[1:])
                     index += 1
                 targets.append(
-                    Target(name, phony, recipe_file, recipe_line, double, prerequisites)
+                    Target(
+                        name,
+                        phony,
+                        recipe_file,
+                        recipe_line,
+                        double,
+                        prerequisites,
+                        tuple(recipe_text),
+                    )
                 )
                 continue
             index += 1

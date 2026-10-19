@@ -58,6 +58,14 @@ class Result:
     notes: list[Finding] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     make_version: str = ""
+    #: "checked", "skipped" or "off" -- whether each finding below was tested
+    #: by deleting its line and running make again. See `verify.py`.
+    verification: str = "off"
+    verified: int = 0
+    #: Candidates the verifier threw out, as (kind, line, detail). These are
+    #: lines the model called dead and make proved were not.
+    rejected: list[tuple[str, int, str]] = field(default_factory=list)
+    make_runs: int = 0
 
     def sorted_findings(self) -> list[Finding]:
         return sorted(self.findings, key=lambda f: (f.file != self.makefile, f.file, f.line))

@@ -47,6 +47,27 @@ def text(result: Result, quiet: bool = False) -> str:
     else:
         lines.append("Every line unmade can check has an effect on this build.")
 
+    if result.verification == "checked" and result.verified:
+        plural = "s" if result.verified != 1 else ""
+        lines.append(
+            f"{result.verified} of them confirmed by deleting the line and running "
+            f"make again ({result.make_runs} make runs)."
+        )
+
+    if result.rejected:
+        lines.append("")
+        plural = "s" if len(result.rejected) != 1 else ""
+        lines.append(
+            _wrap(
+                f"{len(result.rejected)} line{plural} looked dead and was not: make's "
+                f"output changed when it was deleted, so unmade dropped the finding. "
+                f"Usually a reset that feeds the old value back in.",
+                "",
+            )
+        )
+        for kind, line, _ in result.rejected:
+            lines.append(f"    {result.makefile}:{line}: would have been {kind}")
+
     if result.notes:
         lines.append("")
         for note in result.notes:
@@ -77,6 +98,13 @@ def as_json(result: Result) -> str:
             "makefile": result.makefile,
             "make_version": result.make_version,
             "makefiles_read": list(result.makefile_list),
+            "verification": result.verification,
+            "verified": result.verified,
+            "make_runs": result.make_runs,
+            "rejected": [
+                {"kind": kind, "line": line, "detail": detail}
+                for kind, line, detail in result.rejected
+            ],
             "findings": [
                 {
                     "kind": finding.kind,
