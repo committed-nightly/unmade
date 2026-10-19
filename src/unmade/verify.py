@@ -102,46 +102,95 @@ class Verifier:
         #: no deletion can be compared against anything.
         self.unusable: str | None = None
         self.baseline: tuple | None = None
+        self._path: str | None = None
+
+    def _scratch(self) -> str:
+        """The one temporary name every measurement reuses.
+
+        Deliberately allocated once. A fresh random name per run would make
+        a makefile that reads `$(MAKEFILE_LIST)` give a different answer
+        every time, turning a detectable problem into noise spread across
+        every comparison.
+        """
+        if self._path is None:
+            try:
+                handle = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=self.directory,
+                    prefix=".unmade-",
+                    suffix=".mk",
+                    delete=False,
+                )
+            except OSError as exc:
+                # A read-only or root-owned source tree, which is the normal
+                # state of anything under /usr/src. Nothing can be verified,
+                # and the caller reports that rather than guessing.
+                raise Unwritable(str(exc)) from exc
+            handle.close()
+            self._path = handle.name
+        return self._path
 
     def _measure(self, text: str) -> tuple | None:
+        path = self._scratch()
         try:
-            handle = tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.directory,
-                prefix=".unmade-",
-                suffix=".mk",
-                delete=False,
-            )
-        except OSError as exc:
-            # A read-only or root-owned source tree, which is the normal
-            # state of anything under /usr/src. Nothing can be verified, and
-            # the caller reports that rather than guessing.
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as exc:  # pragma: no cover - the directory was writable
             raise Unwritable(str(exc)) from exc
         try:
-            handle.write(text)
-            handle.close()
-            name = os.path.basename(handle.name)
             self.runs += 1
-            db = database.read(name, self.directory, self.make, self.variables)
+            db = database.read(
+                os.path.basename(path), self.directory, self.make, self.variables
+            )
             return fingerprint(db)
         except database.MakeRefused:
             # Deleting the line broke the makefile, so the line mattered.
             return None
-        finally:
-            try:
-                os.unlink(handle.name)
-            except OSError:  # pragma: no cover - best effort
-                pass
+
+    def cleanup(self) -> None:
+        if self._path is None:
+            return
+        try:
+            os.unlink(self._path)
+        except OSError:  # pragma: no cover - best effort
+            pass
+        self._path = None
 
     def prepare(self) -> bool:
-        """Measure the unedited file through the same path as every edit.
+        """Establish a baseline, and refuse if there cannot be one.
 
-        If the fingerprint taken from a renamed copy differs from the one
-        taken from the real file, the makefile reads its own name -- through
-        `$(MAKEFILE_LIST)` or `$(lastword ...)` -- and every later comparison
-        would be against the wrong baseline. Say so and verify nothing.
+        Two distinct things make a makefile untestable by this method, and
+        they are checked in this order because the second test cannot tell
+        them apart on its own:
+
+        1. *Not reproducible.* Measure the same unedited text twice. If the
+           two disagree, nothing can be compared against anything --
+           `$(shell date +%s%N)` expands on every read, and a rule that
+           rebuilds an `include`d file runs its recipe even under `-q`.
+        2. *Reads its own name.* The check runs a renamed copy, so a makefile
+           using `$(MAKEFILE_LIST)` or `$(lastword ...)` would be compared
+           against the wrong baseline.
         """
+        try:
+            copied = self._measure(self.source)
+            again = self._measure(self.source)
+        except Unwritable as exc:
+            self.unusable = (
+                f"unmade could not write a temporary copy next to {self.makefile} "
+                f"({exc}), and a line can only be tested where its makefile's "
+                f"relative paths still resolve"
+            )
+            return False
+
+        if copied is None or again != copied:
+            self.unusable = (
+                "two identical runs of this makefile disagreed, so deleting a "
+                "line proves nothing; something it does while being read is "
+                "not reproducible"
+            )
+            return False
+
         try:
             direct = fingerprint(
                 database.read(self.makefile, self.directory, self.make, self.variables)
@@ -150,21 +199,13 @@ class Verifier:
             self.unusable = str(exc)
             return False
 
-        try:
-            copied = self._measure(self.source)
-        except Unwritable as exc:
-            self.unusable = (
-                f"unmade could not write a temporary copy next to {self.makefile} "
-                f"({exc}), and a line can only be tested where its makefile's "
-                f"relative paths still resolve"
-            )
-            return False
-        if copied is None or copied != direct:
+        if copied != direct:
             self.unusable = (
                 "this makefile behaves differently when read under another "
                 "name, so a line can't be tested by deleting it from a copy"
             )
             return False
+
         self.baseline = direct
         return True
 
@@ -201,6 +242,13 @@ def verify(
         return result
 
     verifier = Verifier(directory, result.makefile, make, variables)
+    try:
+        return _verify_with(result, verifier, candidates)
+    finally:
+        verifier.cleanup()
+
+
+def _verify_with(result: Result, verifier: Verifier, candidates: list[Finding]) -> Result:
     if not verifier.prepare():
         result.notes.append(
             Finding(

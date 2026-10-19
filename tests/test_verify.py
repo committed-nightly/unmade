@@ -110,20 +110,20 @@ def test_a_genuine_finding_survives(tmp_path):
     assert result.verified == 1
 
 
-def test_a_clean_set_costs_one_extra_make_run(tmp_path):
+def test_a_clean_set_costs_two_extra_make_runs(tmp_path):
     """The fast path: test every candidate at once, and usually stop there.
 
-    Two runs: one baseline through the renamed copy, one with all the
-    candidate lines removed.
+    Three runs: the baseline through the renamed copy, the same text again to
+    show it is reproducible, and one with all the candidate lines removed.
     """
     result = checked(tmp_path, GENUINELY_SUPERSEDED)
-    assert result.make_runs == 2
+    assert result.make_runs == 3
 
 
 def test_a_mixed_set_falls_back_to_one_run_per_line(tmp_path):
     result = checked(tmp_path, SELF_REFERENCE_VIA_TMP)
-    # baseline + the whole set + one per candidate
-    assert result.make_runs == 2 + 3
+    # baseline, the reproducibility re-run, the whole set, one per candidate
+    assert result.make_runs == 3 + 3
 
 
 def test_no_verify_leaves_the_model_in_charge(tmp_path, capsys):
@@ -207,3 +207,22 @@ def test_phony_and_origin_findings_are_not_deletion_checked(tmp_path):
     # No candidate was verifiable, so make was never re-run.
     assert result.verification == "off"
     assert result.make_runs == 0
+
+
+def test_an_unreproducible_makefile_is_not_verified(tmp_path, capsys):
+    """A makefile whose own reading is not deterministic cannot be tested.
+
+    `$(shell date +%s%N)` expands while make reads the file and gives a
+    different answer every run, so two identical runs disagree. That is the
+    signal to stop rather than to compare noise -- without this guard the
+    first comparison would reject a correct finding at random.
+    """
+    (tmp_path / "Makefile").write_text(
+        "STAMP := $(shell date +%s%N)\nA = 1\nA = 2\nall: ; @echo $(A)\n"
+    )
+    assert cli.main([str(tmp_path / "Makefile")]) == 1
+    out = capsys.readouterr().out
+    assert "unverified" in out
+    assert "two identical runs of this makefile disagreed" in out
+    # The finding is still reported, labelled as unchecked.
+    assert "superseded" in out

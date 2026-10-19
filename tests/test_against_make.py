@@ -313,12 +313,38 @@ def test_environment_loses_to_plain_assignment_and_wins_against_question(tmp_pat
     assert ran.stdout.split() == ["from-file", "from-env"]
 
 
-def test_question_mode_runs_no_recipe(tmp_path):
-    """`make -qp` must not run recipes. The README says so."""
+def test_question_mode_runs_no_ordinary_recipe(tmp_path):
+    """`make -qp` must not run an ordinary target's recipe."""
     _require_make()
     (tmp_path / "Makefile").write_text("all:\n\t@touch RECIPE-RAN\n")
     database.read("Makefile", str(tmp_path))
     assert not (tmp_path / "RECIPE-RAN").exists()
+
+
+def test_question_mode_does_run_a_makefile_remaking_recipe(tmp_path):
+    """...but a rule that rebuilds an included makefile runs anyway.
+
+    make has to read its makefiles before question mode has a question to
+    answer, so makefile remaking happens first and `-q` does not stop it.
+    The two halves are tested together because "`-q` runs no recipes" is the
+    plausible, wrong version, and unmade's own README said it before this
+    test existed.
+
+    It matters more here than it would elsewhere: verification runs make
+    once per candidate, so a side effect in a makefile-remaking rule
+    happens once per run rather than once.
+    """
+    _require_make()
+    (tmp_path / "Makefile").write_text(
+        "include generated.mk\n"
+        "generated.mk:\n"
+        "\t@touch REMAKE-RAN; echo 'X = 1' > generated.mk\n"
+        "all:\n"
+        "\t@touch ORDINARY-RAN\n"
+    )
+    database.read("Makefile", str(tmp_path))
+    assert (tmp_path / "REMAKE-RAN").exists(), "makefile remaking should have run"
+    assert not (tmp_path / "ORDINARY-RAN").exists(), "an ordinary recipe should not"
 
 
 def test_shell_function_does_run_under_question_mode(tmp_path):

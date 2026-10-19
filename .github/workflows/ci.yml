@@ -58,7 +58,7 @@ jobs:
           cat out.txt
           test "$status" -eq 1
           grep -qF '7 lines with no effect on this build.' out.txt
-          grep -qF '6 of them confirmed by deleting the line and running make again (2 make runs).' out.txt
+          grep -qF '6 of them confirmed by deleting the line and running make again (3 make runs).' out.txt
           for kind in superseded unread-include never-read \
                       phony-without-rule overridden-recipe; do
             grep -qF "$kind" out.txt

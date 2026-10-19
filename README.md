@@ -70,7 +70,7 @@ Makefile:40: overridden-recipe
     make used: Makefile:50
 
 7 lines with no effect on this build.
-6 of them confirmed by deleting the line and running make again (2 make runs).
+6 of them confirmed by deleting the line and running make again (3 make runs).
 ```
 
 Every answer is for *this* invocation, and saying so is the point. Add
@@ -124,7 +124,7 @@ variables deep and arrives through `filter-out`, and no amount of modelling
 in a tool like this is going to catch it.
 
 Deleting a line and looking catches it without needing to understand why. On
-that file unmade nominates 129 candidates, throws out 125, and keeps 4 — and
+that file unmade nominates 134 candidates, throws out 125, and keeps 9 — and
 two of the survivors are findings no model would have produced at all:
 
 ```
@@ -144,10 +144,11 @@ defines a variable where the lexer cannot see it.
 
 ### What it costs
 
-One `make -qp` for the database, one for the baseline, and one more if every
-candidate is dead — the usual case. When some candidates turn out to be live
+One `make -qp` for the database, two for the baseline — the second to show
+that two identical runs agree — and one more if every candidate is dead,
+which is the usual case. When some candidates turn out to be live
 it falls back to one run per candidate, which is where the selftests file
-spends 136 runs and about 90 seconds. `--no-verify` skips the whole step and
+spends 137 runs and about 90 seconds. `--no-verify` skips the whole step and
 leaves you with what a precedence model thinks, which on that file would be
 125 wrong answers.
 
