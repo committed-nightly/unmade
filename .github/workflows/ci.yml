@@ -1,0 +1,148 @@
+name: CI
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Almost every test here skips itself without GNU make, so assert one
+      # is present rather than let a run that tested nothing report green.
+      - name: GNU make is on PATH
+        run: make --version | head -1 | grep -qF 'GNU Make'
+
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      - run: ruff check .
+
+  dogfood:
+    # The README quotes this run. If the example or the tool changes, this is
+    # the job that notices before a reader does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e .
+
+      - name: the example reports what the README says it reports
+        run: |
+          set -euo pipefail
+          cd examples
+          unmade Makefile > out.txt && status=0 || status=$?
+          cat out.txt
+          test "$status" -eq 1
+          grep -qF '7 lines with no effect on this build.' out.txt
+          grep -qF '6 of them confirmed by deleting the line and running make again (3 make runs).' out.txt
+          for kind in superseded unread-include never-read \
+                      phony-without-rule overridden-recipe; do
+            grep -qF "$kind" out.txt
+          done
+          # The exact lines the README names, so a renumbered example is caught.
+          for place in 'Makefile:11' 'Makefile:17' 'Makefile:23' \
+                       'Makefile:27' 'Makefile:28' 'Makefile:31' 'Makefile:40'; do
+            grep -qF "$place" out.txt
+          done
+
+      - name: the verdict follows the invocation
+        run: |
+          set -euo pipefail
+          cd examples
+          # Plain: the ifeq block is dead and CC = gcc is live.
+          unmade Makefile -q > plain.txt || true
+          grep -qF 'Makefile:27' plain.txt
+          grep -qF 'Makefile:28' plain.txt
+          if grep -qE '^Makefile:5:' plain.txt; then
+            echo 'CC = gcc was called dead with no TOOLCHAIN set' >&2
+            exit 1
+          fi
+
+          # With TOOLCHAIN=clang the two swap over. This is the claim the
+          # README makes about -D, asserted in both directions.
+          unmade Makefile -q -D TOOLCHAIN=clang > clang.txt || true
+          grep -qE '^Makefile:5:' clang.txt
+          if grep -qF 'Makefile:27' clang.txt; then
+            echo 'the ifeq branch was still called dead with TOOLCHAIN=clang' >&2
+            exit 1
+          fi
+
+      - name: the deletion check is what removes a self-referencing reset
+        run: |
+          set -euo pipefail
+          # The selftests shape from the README, cut down. Without the check
+          # unmade calls line 1 dead; with it, line 1 survives. If both
+          # agreed, the verification step would be doing nothing.
+          mkdir -p selfref && cd selfref
+          printf 'CFLAGS = -Wall\nCFLAGS := $(CFLAGS) -O2\nall: ; @echo $(CFLAGS)\n' > Makefile
+
+          unmade Makefile -q --no-verify > unverified.txt && s=0 || s=$?
+          test "$s" -eq 1
+          grep -qE '^Makefile:1: superseded' unverified.txt
+
+          unmade Makefile > verified.txt && s=0 || s=$?
+          cat verified.txt
+          test "$s" -eq 0
+          grep -qF 'Every line unmade can check has an effect' verified.txt
+          grep -qF 'looked dead and was not' verified.txt
+
+      - name: a clean makefile exits 0 and says so
+        run: |
+          set -euo pipefail
+          mkdir -p clean && cd clean
+          printf 'CC = gcc\nall: ; @echo $(CC)\n' > Makefile
+          unmade Makefile | tee clean.txt
+          grep -qF 'Every line unmade can check has an effect' clean.txt
+
+      - name: a makefile make refuses exits 2 and claims nothing on stdout
+        run: |
+          set -euo pipefail
+          mkdir -p broken && cd broken
+          printf 'all:\n\t@true\nifeq (1,1)\n' > Makefile
+          unmade Makefile >out.txt 2>err.txt && s=0 || s=$?
+          test "$s" -eq 2
+          grep -qF "missing 'endif'" err.txt
+          # make prints ~35KB of partial database before giving up, so the
+          # thing to assert is that none of it became a finding.
+          test ! -s out.txt
+
+      - name: --json is valid JSON and carries the verification result
+        run: |
+          set -euo pipefail
+          cd examples
+          unmade Makefile --json > out.json || true
+          python3 -c "
+          import json
+          d = json.load(open('out.json'))
+          assert len(d['findings']) == 7, d['findings']
+          assert d['verification'] == 'checked', d
+          assert d['verified'] == 6, d['verified']
+          assert d['rejected'] == [], d['rejected']
+          assert d['makefiles_read'] == ['Makefile'], d['makefiles_read']
+          assert 'GNU Make' in d['make_version']
+          print('json ok')
+          "
