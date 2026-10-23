@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-from . import analyse, database, lex, report, verify
+from . import analyse, database, lex, phony, report, verify
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -146,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
 
     result = analyse.analyse(lexed, db, name, directory)
     result.make_version = version
+    # Before the deletion check, and not behind --no-verify: this one decides
+    # whether a `.PHONY:` finding is true at all, rather than confirming a
+    # true one. See phony.py's docstring for why that is a different call.
+    result = phony.check(result, directory, args.make, tuple(args.define))
     if not args.no_verify:
         result = verify.verify(result, directory, args.make, tuple(args.define))
     for file in unreadable:

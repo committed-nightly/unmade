@@ -209,6 +209,28 @@ class Verifier:
         self.baseline = direct
         return True
 
+    def goal(self, lines: list[str], goal: str) -> database.Database | None:
+        """Ask make about one goal, with `lines` in place of the makefile.
+
+        Shares the scratch copy and its placement rules with the deletion
+        check and nothing else: this hands back make's database rather than a
+        fingerprint, because the caller's question is whether a rule for
+        `goal` exists at all, not whether anything changed. See `phony.py`.
+
+        Not counted in `runs`. That number is quoted in the report next to
+        the deletion check it belongs to, and probes of another shape would
+        make it mean two things at once.
+        """
+        path = self._scratch()
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines))
+        except OSError as exc:
+            raise Unwritable(str(exc)) from exc
+        return database.read_goal(
+            os.path.basename(path), self.directory, goal, self.make, self.variables
+        )
+
     def without(self, line_numbers: set[int]) -> tuple | None:
         text = "\n".join(
             line for index, line in enumerate(self.lines, start=1) if index not in line_numbers

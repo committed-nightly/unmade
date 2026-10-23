@@ -24,6 +24,32 @@ from . import database, lex
 #: exists is the only one it reads.
 DEFAULT_NAMES = ("GNUmakefile", "makefile", "Makefile")
 
+#: make's own special targets, which appear in the database as ordinary
+#: targets whose prerequisites are their arguments. `.PHONY: clean` is a
+#: target `.PHONY` with a prerequisite `clean`, so anything asking "what
+#: lists this name as a prerequisite" has to skip these or every declared
+#: name looks like it is needed by something.
+SPECIAL_TARGETS = frozenset(
+    {
+        ".DEFAULT",
+        ".DELETE_ON_ERROR",
+        ".EXPORT_ALL_VARIABLES",
+        ".IGNORE",
+        ".INTERMEDIATE",
+        ".LOW_RESOLUTION_TIME",
+        ".NOTINTERMEDIATE",
+        ".NOTPARALLEL",
+        ".ONESHELL",
+        ".PHONY",
+        ".POSIX",
+        ".PRECIOUS",
+        ".SECONDARY",
+        ".SECONDEXPANSION",
+        ".SILENT",
+        ".SUFFIXES",
+    }
+)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -33,6 +59,11 @@ class Finding:
     detail: str
     #: What make used instead, when that is a place in a file.
     instead: str | None = None
+    #: The one name on the line this finding is about, when the line carries
+    #: several and only one of them is dead. Set for `phony-without-rule`:
+    #: `.PHONY: build clean` can be live in `build` and dead in `clean`, so
+    #: the subject is the name, not the line, and not its deletion.
+    subject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -378,10 +409,25 @@ def _check_phony(
             declared.setdefault(name, line)
             declared_in.setdefault(name, file)
 
+    # Names some live rule lists as a prerequisite. A phony prerequisite is
+    # never up to date, so every target depending on it rebuilds on every
+    # invocation -- which is the loudest effect a `.PHONY:` name can have,
+    # and `does_nothing` is blind to it because it only looks at the target
+    # itself. Measured on a two-line makefile: three `make prog` in a row
+    # build three times with the name phony and once without.
+    needed_by: dict[str, str] = {}
+    for target in db.targets:
+        if target.name in SPECIAL_TARGETS:
+            continue
+        for prerequisite in target.prerequisites:
+            needed_by.setdefault(prerequisite, target.name)
+
     for target in db.targets:
         if not target.phony or not target.does_nothing:
             continue
         if target.name not in declared:
+            continue
+        if target.name in needed_by:
             continue
         result.findings.append(
             Finding(
@@ -390,6 +436,7 @@ def _check_phony(
                 declared[target.name],
                 f"`.PHONY: {target.name}` names a target with no rule anywhere, so "
                 f"`make {target.name}` runs nothing and exits 0",
+                subject=target.name,
             )
         )
 
