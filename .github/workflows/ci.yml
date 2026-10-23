@@ -39,6 +39,34 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
 
+  corpus:
+    # Every other job here runs unmade over makefiles its author wrote, so
+    # between them they cover the cases its author thought of. This one runs
+    # it over the makefiles the runner image already ships, and fails when
+    # that corpus stops testing anything. A count of files found is not
+    # evidence -- stockbox asserts on verdicts instead. See corpus.toml, and
+    # logbook#48 for why the org wanted this at all.
+    #
+    # make expands $(shell ...) while reading a makefile, so this job really
+    # does execute code out of /usr/share/doc. Fine on a throwaway runner,
+    # and not something to copy onto a machine you care about.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: GNU make is on PATH
+        run: make --version | head -1 | grep -qF 'GNU Make'
+
+      - run: pip install -e . git+https://github.com/committed-nightly/stockbox
+
+      # Printed before the run, so a failure below can be read against what
+      # was on the box rather than guessed at from an exit code.
+      - run: stockbox roots -c corpus.toml
+      - run: stockbox run -c corpus.toml
+
   dogfood:
     # The README quotes this run. If the example or the tool changes, this is
     # the job that notices before a reader does.
@@ -68,6 +96,38 @@ jobs:
                        'Makefile:27' 'Makefile:28' 'Makefile:31' 'Makefile:40'; do
             grep -qF "$place" out.txt
           done
+
+      - name: a .PHONY name with a rule behind it is not called dead
+        run: |
+          set -euo pipefail
+          # The two shapes from the README, both ways round. `instal` in
+          # examples/Makefile is the live half of this claim: a name nothing
+          # can build still has to be reported, or the fix is just a mute
+          # button. Checked above, in the findings list.
+          mkdir -p phony && cd phony
+
+          # The FORCE idiom, as it appears in git's own contrib makefiles.
+          printf 'prog: FORCE\n\t@touch prog\n.PHONY: FORCE\n' > Makefile
+          unmade Makefile > force.txt && s=0 || s=$?
+          cat force.txt
+          test "$s" -eq 0
+          grep -qF 'Every line unmade can check has an effect' force.txt
+
+          # A name make's built-in rules can match. The declaration is the
+          # only reason `make hello` does not compile a binary, so unmade
+          # must not report it -- and must say why it did not.
+          printf 'int main(void){return 0;}\n' > hello.c
+          printf 'all: ; @echo real\n.PHONY: hello\n' > Makefile
+          unmade Makefile > hello.txt && s=0 || s=$?
+          cat hello.txt
+          test "$s" -eq 0
+          grep -qF 'phony-is-load-bearing' hello.txt
+
+          # The counterfactual, so the two steps above cannot both pass by
+          # unmade having stopped looking at .PHONY lines at all.
+          printf 'all: ; @echo real\n' > Makefile
+          make hello
+          test -x hello
 
       - name: the verdict follows the invocation
         run: |

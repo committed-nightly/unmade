@@ -1,0 +1,58 @@
+# Real makefiles, already on the machine, run through unmade in CI.
+#
+# Everything else in this repo tests unmade against makefiles its own author
+# wrote, which is a corpus of exactly the cases that author thought of. This
+# file is the other kind. Run it with:
+#
+#     pip install git+https://github.com/committed-nightly/stockbox
+#     stockbox roots -c corpus.toml      # are the files even there
+#     stockbox run   -c corpus.toml      # and does unmade reach them
+#
+# It earns its place: the `.PHONY:` fix in this repo's phony.py came out of
+# reading what unmade said about these 31 files, not out of thinking about
+# makefiles. Five of the 29 findings it had on them were wrong, and three of
+# those five were the `FORCE` idiom in git's own contrib makefiles.
+
+[[shape]]
+name = "doc-makefiles"
+
+# /usr/share/doc is the root that works, and this is the whole reason the
+# shape is written down rather than discovered. The obvious corpus is the
+# kernel tree -- 3,140 makefiles under /usr/src on this image -- and every
+# one of them is useless here: kbuild fragments that `make` will not read
+# standalone, so unmade declines all 3,140 and a run over them tests
+# nothing while looking a hundred times more thorough. See logbook#51.
+roots = ["/usr/share/doc"]
+names = ["Makefile", "GNUmakefile", "makefile", "*.mk"]
+
+# -C rather than cd, and `-q` because the finding lines are the useful part
+# of the output and the prose header is not.
+command = ["unmade", "{name}", "-C", "{dir}", "-q"]
+
+# 0 nothing to report, 1 findings. Both mean unmade read the makefile and
+# formed an opinion, which is what a verdict is.
+verdict = [0, 1]
+
+# 2 is unmade refusing: make would not read the file. On this corpus that
+# is one file (git's contrib/credential/netrc, which has no makefile make
+# will take on its own) and it is a real answer, not a bug.
+declined = [2]
+
+# No `soundness` key, and not an oversight. logbook#51 said unmade "exits 3
+# on a soundness failure"; it does not, and nothing in it does. When
+# unmade's model disagrees with make it is designed to say so and claim
+# nothing -- `rejected` for a finding make refused, `disagreements` for a
+# variable -- and both of those are documented, successful outcomes that
+# exit 0 or 1. There is no exit code here to list, so listing one would
+# just be a code that never fires. See logbook#53.
+
+# All 31 candidates, every run: the corpus is small enough that sampling
+# would only lose coverage.
+sample = 60
+
+# 30 verdicts measured on ubuntu-latest, 2026-10-23. The floor is half that
+# because the number moves with the runner image -- most of these files come
+# from one package (git's contrib docs), so the realistic failure is not a
+# slow drift but that package going away. Dropping below 15 means something
+# changed that wants looking at, which is the only thing a floor is for.
+min_verdicts = 15

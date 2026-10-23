@@ -85,7 +85,7 @@ Every answer is for *this* invocation, and saying so is the point. Add
 | `never-read` | the line is in a conditional branch make did not enter, or a file it never read |
 | `overridden-recipe` | a later rule for the same single-colon target replaces this recipe |
 | `unread-include` | `-include` of a file that was not there, which make does not mention |
-| `phony-without-rule` | a `.PHONY` name with no rule, so `make <name>` does nothing and exits 0 |
+| `phony-without-rule` | a `.PHONY` name nothing can build, so `make <name>` does nothing and exits 0 |
 | `beaten-by-command-line` | `make VAR=x` beats the makefile, unless the makefile says `override` |
 | `beaten-by-environment` | a `?=` lost to the environment, or `-e` was in play |
 | `not-the-default-makefile` | a bare `make` in this directory reads a different file |
@@ -142,6 +142,38 @@ reports nothing for that variable and prints the disagreement — see the
 bottom of the output. `$(eval ...)` does this, and so will anything else that
 defines a variable where the lexer cannot see it.
 
+**The `.PHONY` probe.** One more question, asked the same way, because the
+database cannot answer it. A `.PHONY:` name with no rule looks identical in
+`make -qp` whether nothing can build it or something can — and the reason it
+looks that way is the reason the line is worth writing: *make does not search
+implicit rules for a phony target*. So this is the whole of the `FORCE` idiom,
+from git's own `contrib/diff-highlight/Makefile`:
+
+```make
+shebang.perl: FORCE
+	...
+.PHONY: FORCE
+```
+
+Take `.PHONY: FORCE` away and `shebang.perl` stops regenerating. unmade used
+to call that line dead, in three of git's contrib makefiles and in the stock
+Sphinx makefile that ships with `python3-launchpadlib`, whose
+`.PHONY: help Makefile` is what stops its catch-all `%: Makefile` rebuilding
+make's own makefile.
+
+Whether a rule can match a name depends on stems, on `.SUFFIXES`, on which
+prerequisites exist on this machine and on a hundred built-ins, so unmade does
+not work it out. It takes the name off its `.PHONY:` line, asks make for that
+goal, and sees whether make finds a way. If it does, there is no finding and a
+`phony-is-load-bearing` note says what make found. This runs even under
+`--no-verify`: "this line loses to that one" is a model's opinion worth
+having, but "no rule for this name exists anywhere" is a claim about make's
+rule set that is simply true or false.
+
+A name some live rule lists as a prerequisite is excluded without asking
+anything, because a phony prerequisite is never up to date and its parent
+rebuilds every time — the loudest effect such a line can have.
+
 ### What it costs
 
 One `make -qp` for the database, two for the baseline — the second to show
@@ -151,6 +183,10 @@ it falls back to one run per candidate, which is where the selftests file
 spends 137 runs and about 90 seconds. `--no-verify` skips the whole step and
 leaves you with what a precedence model thinks, which on that file would be
 125 wrong answers.
+
+The `.PHONY` probe adds one run per candidate name, and a makefile with no
+`.PHONY:` line adds none. Those runs are not counted in the `(N make runs)`
+the report quotes, which is the deletion check's own number.
 
 ## Two things to know before you run it
 
@@ -170,9 +206,12 @@ than skipping the check silently.
 
 ## What it deliberately does not do
 
-- **Pattern and implicit rules.** make's database lists them but says nothing
-  about whether one ever matched, so whether `%.o: %.weird` is dead is not a
-  question unmade can answer by reading. It stays quiet rather than guessing.
+- **Pattern and implicit rules.** Whether `%.o: %.weird` is itself dead is not
+  a question unmade answers: make's database lists the rule but says nothing
+  about whether one ever matched, and it stays quiet rather than guessing. It
+  does ask make whether *some* rule can match one specific name — see the
+  `.PHONY` probe above — which is a narrower question with an experiment
+  attached.
 - **Target reachability.** A target nothing depends on is not reported.
 - **Target-specific variables** (`test: CFLAGS = -g`) are not modelled, so
   they are neither reported nor mistaken for global assignments.
@@ -194,6 +233,22 @@ finding unmade produces on every case makefile, it deletes the line and
 asserts make's behaviour is unchanged. A failure there means unmade told
 someone to delete a line that mattered, which is the only outcome in this
 project worse than staying silent.
+
+Everything under `tests/` runs on makefiles written for this repo, which is a
+corpus of the cases its author thought of. `corpus.toml` is the other kind —
+the 31 real makefiles that ship on a stock Ubuntu runner, run in CI via
+[stockbox](https://github.com/committed-nightly/stockbox), which fails the job
+if the corpus stops testing anything:
+
+```sh
+pip install git+https://github.com/committed-nightly/stockbox
+stockbox roots -c corpus.toml
+stockbox run   -c corpus.toml
+```
+
+It is not decoration. The `.PHONY` probe exists because of what unmade said
+about those files: 5 of its 29 findings on them were wrong, and three of the
+five were `.PHONY: FORCE`.
 
 ## Licence
 
