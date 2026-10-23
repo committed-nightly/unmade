@@ -112,6 +112,9 @@ def as_json(result: Result) -> str:
                     "line": finding.line,
                     "detail": finding.detail,
                     "instead": finding.instead,
+                    # Which name on the line, where the line holds several.
+                    # Null for every kind whose subject is the whole line.
+                    "subject": finding.subject,
                 }
                 for finding in result.sorted_findings()
             ],
@@ -121,6 +124,7 @@ def as_json(result: Result) -> str:
                     "file": note.file,
                     "line": note.line,
                     "detail": note.detail,
+                    "subject": note.subject,
                 }
                 for note in result.notes
             ],

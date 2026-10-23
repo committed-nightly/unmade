@@ -169,6 +169,53 @@ def read(
     return parse(result.stdout, result.stderr)
 
 
+def read_goal(
+    makefile: str,
+    directory: str,
+    goal: str,
+    make: str = "make",
+    variables: tuple[str, ...] = (),
+) -> Database | None:
+    """Ask make what it would do for one named goal. `None` if it cannot.
+
+    `read` asks about the default goal, so the database it returns says
+    nothing about a name no rule mentions explicitly: make resolves implicit
+    and pattern rules only for goals it was actually asked about. Naming the
+    goal is the whole point here -- it is what makes `hello: hello.c` appear
+    for a makefile in which neither `hello` nor `%:` is written down.
+
+    `None` means make gave up on the goal, which it does both when no rule
+    matches and when one matches but a prerequisite cannot be built. Those
+    two are byte-identical in the printed database and differ only in a
+    stderr message, and they do not need telling apart: in both, `make
+    <goal>` runs no recipe and builds nothing.
+
+    `--old-file` is on the makefile itself, because the caller's edit can
+    leave a catch-all `%:` rule matching the makefile's own name -- and a
+    rule that remakes a makefile runs its recipe even under `-q`. Suppressing
+    that costs nothing: the goal's own rules resolve the same either way,
+    asserted both ways in the tests.
+    """
+    if "=" in goal or goal.startswith("-"):
+        # make would read it as an assignment or a flag, not a goal.
+        return None
+    args = [
+        make,
+        "-qp",
+        "--no-print-directory",
+        "--old-file",
+        makefile,
+        "-f",
+        makefile,
+        *variables,
+        goal,
+    ]
+    result = _run(args, cwd=directory)
+    if result.returncode not in (0, 1):
+        return None
+    return parse(result.stdout, result.stderr)
+
+
 def parse(stdout: str, stderr: str = "") -> Database:
     """Parse `make -qp` output. Split out from `read` so tests can feed it."""
     variables: dict[str, Variable] = {}
