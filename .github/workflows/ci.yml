@@ -204,5 +204,8 @@ jobs:
           assert d['rejected'] == [], d['rejected']
           assert d['makefiles_read'] == ['Makefile'], d['makefiles_read']
           assert 'GNU Make' in d['make_version']
+          # Which .PHONY name was reported, without parsing the prose for it.
+          phony = [f for f in d['findings'] if f['kind'] == 'phony-without-rule']
+          assert [f['subject'] for f in phony] == ['instal'], phony
           print('json ok')
           "
