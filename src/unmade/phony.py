@@ -45,31 +45,43 @@ def _without_name(lines: list[str], name: str) -> list[str] | None:
     question is what make would do if this name were not phony at all, and a
     second `.PHONY:` line naming it would quietly answer a different one.
 
-    Returns `None` if the name is not a plain word on any such line -- it
-    came in through a variable, a continuation that does not split the way
-    this expects, or something else not worth guessing at.
+    Returns `None` when the name is not a plain word on any such line: it
+    came in through a variable, or the line declares it through more than one
+    target. `.PHONY .SILENT: clean` is the shape to keep in mind -- taking
+    the name off that line would stop it being silent as well as stop it
+    being phony, so the probe would be answering a question nobody asked.
+    The caller keeps the finding and labels it untested.
+
+    The target is matched either side of the colon rather than as a literal
+    `.PHONY:` prefix, because make honours `.PHONY:clean` and
+    `.PHONY : clean` just as readily.
     """
     out = list(lines)
     found = False
     in_phony = False
     for index, line in enumerate(lines):
-        if not in_phony and not line.lstrip().startswith(".PHONY:"):
+        head, colon, rest = line.partition(":")
+        starter = bool(colon) and head.strip() == ".PHONY"
+        if not starter and not in_phony:
             continue
-        # Stay inside the record across `\` continuations, where the names
-        # are on lines that do not start with `.PHONY:` themselves.
+        # Stay inside the record across `\` continuations, whose names are on
+        # lines carrying no `.PHONY:` of their own.
         in_phony = line.rstrip().endswith("\\")
 
-        words = line.split()
+        prefix, names = (f"{head}{colon}", rest) if starter else ("", line)
+        words = names.split()
         if name not in words:
             continue
+        # A trailing `\` is one of these words and is never the name, so a
+        # continued declaration keeps its continuation.
         kept = [word for word in words if word != name]
-        if kept == [".PHONY:"]:
-            # Nothing left to declare. `.PHONY:` on its own is legal and
-            # declares nothing, but an empty line is what a reader would
-            # have written, and make treats the two the same.
-            out[index] = ""
+        if kept:
+            out[index] = f"{prefix} {' '.join(kept)}".strip()
         else:
-            out[index] = " ".join(kept)
+            # Nothing left to declare. A bare `.PHONY:` is legal and declares
+            # nothing, but an empty line is what a reader would have written
+            # and make treats the two the same.
+            out[index] = ""
         found = True
 
     return out if found else None
