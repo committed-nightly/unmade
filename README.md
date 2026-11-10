@@ -234,6 +234,13 @@ asserts make's behaviour is unchanged. A failure there means unmade told
 someone to delete a line that mattered, which is the only outcome in this
 project worse than staying silent.
 
+`tests/test_readme.py` compares the block quoted under [An
+example](#an-example) against a real run, in full, so editing either one
+without the other fails the suite. It is the whole block rather than a handful
+of greps over it because the lines that matter most are the ones unmade *adds*
+when it declines to answer — an unprobed `.PHONY` name, a deletion check that
+could not run — and a check for lines that must be present cannot see those.
+
 Everything under `tests/` runs on makefiles written for this repo, which is a
 corpus of the cases its author thought of. `corpus.toml` is the other kind —
 the 31 real makefiles that ship on a stock Ubuntu runner, run in CI via
